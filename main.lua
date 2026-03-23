@@ -66,6 +66,9 @@ assets.images.sellButtonHover = love.graphics.newImage("img/sellbuttonhover.png"
 assets.images.sellButtonPressed = love.graphics.newImage("img/sellbuttonpressed.png")
 assets.images.itemframe = love.graphics.newImage("img/itemframe.png")
 
+assets.music = {}
+assets.music.daytheme = love.audio.newSource("music/p2yukino.mp3", 'stream')
+
 
 
 assets.fonts = {}
@@ -876,13 +879,23 @@ local SourcePlayer = class({
     extends = Object,
 })
 
-function SourcePlayer:new(source, vol)
+function SourcePlayer:new(source, vol, loops)
     self.source = source or nil
     self.vol = vol or 1.0
+    local loops = loops or false
+    if loops == true then
+        if self.source then
+            self.source:setLooping(loops)
+        end
+    end
 end
 
 function SourcePlayer:play()
     self.source:play()
+end
+
+function  SourcePlayer:setLooping(bool)
+    self.source:setLooping(bool)
 end
 
 function SourcePlayer:pause()
@@ -1094,7 +1107,7 @@ local DialougeBox = class({
 
 function DialougeBox:new(x, y)
 
-    self.testString = "This... will be... fun, I really\n hope so......."
+    self.testString = "This will be fun, I really really \n hope so to the moon and back"
 
     self:super(x, y)
     self.textStrings = {}
@@ -1181,6 +1194,55 @@ function DialougeBox:reset()
     self.textStringIndex = 1
 end
 
+--Class CharacterEvent
+local CharacterEventManager = class({
+    name = "CharacterEventManager",
+    extends = Object
+})
+
+function CharacterEventManager:new()
+    self.sActivate = Signal()
+end
+
+--Class MusicPlayer
+local MusicPlayer = class({
+    name = "MusicPlayer",
+    extends = Object
+})
+
+function MusicPlayer:new()
+    self.currentSong = nil
+end
+
+--Make sure item is a SourcePlayer
+function MusicPlayer:play(item)
+    if self.currentSong then
+        if self.currentSong:isPlaying() then
+            self.currentSong:stop()
+        end
+    end
+
+    self.currentSong = item
+
+    self.currentSong:play()
+end
+
+function MusicPlayer:setLooping(bool)
+    self.currentSong:setLooping(bool)
+end
+
+local CameraStateManager = class({
+    name = "CameraStateManager",
+    extends = Object
+})
+
+function CameraStateManager:new()
+    self.states = {
+        main = 1,
+        flowermenu = 2,
+        characterevent = 3,
+    }
+end
 --------------------------------------------------------
 
 local Game = Object()
@@ -1214,6 +1276,11 @@ addObject(countHintText1)
 local camera = GameCamera(0, 0)
 addObject(camera)
 setCamera(camera)
+
+local musicplayer = MusicPlayer()
+local musday = SourcePlayer(assets.music.daytheme, 1, true)
+musicplayer:play(musday)
+addObject(musicplayer)
 
 local buildingShop = Entity(0, 360)
 buildingShop.choices = {}
@@ -1256,9 +1323,9 @@ local ystart = buildingShop.position.y + 5
 buildingShop.menuButton = addObject(TextureButton(assets.images.buildingboardbutton, 300, 350))
 buildingShop.menuButton.sHovered:connect(camera.switchMenu, camera)
 
-local bunny = addObject(Sprite(assets.images.pinkbunny, 0, 0))
+--local bunny = addObject(Sprite(assets.images.pinkbunny, 0, 0))
 
-addObject(DialougeBox())
+--addObject(DialougeBox())
 
 
 
