@@ -1,6 +1,7 @@
 love = require 'love'
 love.graphics.setDefaultFilter('nearest', 'nearest')
 
+
 --Require libs
 local anim8 = require 'libs.anim8'
 local baton = require 'libs.baton'
@@ -10,6 +11,7 @@ require("libs.batteries"):export()
 --Engine
 local Engine = {}
 Engine._currentCamera = nil
+Engine._signals = {}
 
 function setCamera(cam)
     Engine._currentCamera = cam
@@ -20,6 +22,7 @@ end
 
 --OBJECT GROUPS CAUSE I LOVE GODOT
 local _objectgroups = {}
+local _destroyQueue = {}
 
 
 function addObjectToGroup(name, object)
@@ -52,6 +55,9 @@ assets.images.pinkflower = love.graphics.newImage("img/pinkflower.png")
 assets.images.redflower = love.graphics.newImage("img/redflower.png")
 assets.images.yellowflower = love.graphics.newImage("img/yellowflower.png")
 assets.images.greenflower = love.graphics.newImage("img/greenflower.png")
+assets.images.weirdWorm = love.graphics.newImage("img/weirdWorm.png")
+
+assets.images.partGrow = love.graphics.newImage("img/partGrow.png")
 
 
 assets.images.buildingboardbg = love.graphics.newImage("img/buildingboardbg.png")
@@ -65,6 +71,12 @@ assets.images.sellButtonNormal = love.graphics.newImage("img/sellbuttonnormal.pn
 assets.images.sellButtonHover = love.graphics.newImage("img/sellbuttonhover.png")
 assets.images.sellButtonPressed = love.graphics.newImage("img/sellbuttonpressed.png")
 assets.images.itemframe = love.graphics.newImage("img/itemframe.png")
+
+assets.particles = {}
+assets.particles.growpart = require 'particles.growpart'
+
+assets.sounds = {}
+assets.sounds.twinkle = love.audio.newSource("sounds/twinkle.wav", 'static')
 
 assets.music = {}
 assets.music.daytheme = love.audio.newSource("music/p2yukino.mp3", 'stream')
@@ -135,6 +147,10 @@ local function addObject(object)
     return object
 end
 
+local function sortByCreatedAt(a, b)
+    return a.createdAt > b.createdAt
+end
+
 local function sortByZ(a, b)
     return a.zIndex > b.zIndex
 end
@@ -161,6 +177,8 @@ local Signal = class({
 function Signal:new()
     --connection = {object, function}
     self._connections = {}
+
+    table.insert(Engine._signals, self)
 
 end
 
@@ -206,6 +224,8 @@ local Object = class({
 function Object:new()
     --Change soon
     self.objectName = "Object"
+    self._signals = {}
+    self._components = {}
     self._postReady = false
     if _G.global_objectId == nil then
         _G.global_objectId = 1
@@ -229,12 +249,42 @@ function Object:subscribeTo(object, eventname, callback)
     object._eventbus:subscribe(eventname, callback)
 end
 
+--Make sure name is a string
+function Object:addSignal(name)
+    self._signals[name] = Signal()
+end
+
+--Make sure name is a string
+function Object:getSignal(name)
+    if self._signals[name] then
+        return self._signals[name]
+    else
+        error("That signal name does not exists")
+    end
+end
+
+function Object:addComponent(object, name)
+    self._components[name] = object
+end
+
+function Object:getComponent(name)
+    if self._components[name] then
+        return self._components[name]
+    else
+        error("That component name does not exists")
+    end
+end
+
 function Object:emitEvent(eventname, ...)
     --self._eventbus:publish(eventname, ...)
 end
 
-function Object:setScript(scriptfunc)
-    self.update = scriptfunc
+function Object:setScript(script)
+    --self.update = script
+
+    for function_name, funct in pairs(script) do
+        self[function_name] = script[function_name]
+    end
 end
 
 --FOR NOW PARENTS CANNOT HAVE GRANDCHILDREN UNTILL I LEARN POSITIONS LOL, THINK OF THIS ENGINE LIKE ADDING PETALS TO A FLOWER BUD, AND ONLY THAT FLOWERBUD AND NOT OTHER PETALS
@@ -253,8 +303,58 @@ function Object:getDrawToGui()
     return self._guiDraw
 end
 
-function Object:destroy()
-    print("Add destroying function and also remove children")
+function Object:queueDestroy()
+    --Check if in queue already
+    local foundItem = false
+    for i, v in ipairs(_destroyQueue) do
+        if v == self then
+            foundItem = true
+        end
+    end
+    if foundItem == false then
+        table.insert(_destroyQueue, self)
+    else
+        print("ITEM IS ALREADY IN QUEUE")
+    end
+end
+
+function Object:_destroyObject()
+    --Remove from entities list
+    local queueobjectremoval = {}
+    for i, v in ipairs(entities) do
+        if v == self then
+            table.insert(queueobjectremoval, table.remove(entities, i))
+        end
+    end
+    --Remove any signals
+    if self._signals then
+        for i, signal in ipairs(self._signals) do
+            table.insert(queueobjectremoval, signal)
+        end
+    end
+
+    --Remove any components
+    if self._components then
+        for i, component in ipairs(self._components) do
+            table.insert(queueobjectremoval, component)
+        end
+    end
+
+    --Remove from any groups
+    for stringname, actualstring in pairs(_objectgroups) do
+        for i, v in ipairs(_objectgroups[stringname]) do
+            if v == self then
+                table.remove(_objectgroups, i)
+            end
+        end
+    end
+    --Final remove
+    for i, v in ipairs(queueobjectremoval) do
+        if v.destroy then
+            v:destroy()
+        end
+        table.clear(v)
+    end
 end
 
 function Object:updateChildren(dt)
@@ -328,6 +428,30 @@ function Entity:updateGlobalPosition()
     end
 end
 
+function Entity:setX(x)
+    self.position.x = x
+end
+
+function Entity:setY(y)
+    self.position.y = y
+end
+
+function Entity:setScaleX(x)
+    self.scale.x = x
+end
+
+function Entity:setScaleY(y)
+    self.scale.y = y
+end
+
+function Entity:setRotation(r)
+    self.roation = r
+end
+
+function Entity:setZDepth(z)
+    self.zIndex = z
+end
+
 function Entity:_get_global_position()
     if _G._transformCache == nil then
         _G._transformCache = {}
@@ -351,6 +475,11 @@ local Sprite = class({
 function Sprite:new(texture, x, y)
     self:super(x, y)
     self.texture = texture
+
+    self.originX = 0
+    self.originY = 0
+    self.shearX = 0
+    self.shearY = 0
 end
 
 function Sprite:setTexture(texture)
@@ -359,6 +488,22 @@ end
 
 function Sprite:getTexture()
     return self.texture
+end
+
+function Sprite:setOriginX(x)
+    self.originX = x
+end
+
+function Sprite:setOriginY(y)
+    self.originY = y
+end
+
+function Sprite:setShearX(x)
+    self.shearX = x
+end
+
+function Sprite:setShearY(y)
+    self.shearY = y
 end
 
 function Sprite:draw()
@@ -371,15 +516,15 @@ function Sprite:draw()
     if true then
         love.graphics.draw(
         self.texture, -- Texture
-        posx, --Position X
-        posy, --Position Y
+        posx + self.originX, --Position X
+        posy + self.originY, --Position Y
         self.rotation, --Rotation
         self.scale.x, --Scale X
         self.scale.y, --Scale Y
-        0,
-        0,
-        0,
-        0
+        self.originX,
+        self.originY,
+        self.shearX,
+        self.shearY
     )
     end
 end
@@ -711,8 +856,8 @@ function TextureButton:new(normaltexture, x, y)
     self.color = {r = 1, g = 1, b = 1}
     self.alpha = 1
 
-    self.sPressed = Signal()
-    self.sHovered = Signal()
+    self:addSignal("Pressed")
+    self:addSignal("Hovered")
 
     self.pressedFunction = nil
 
@@ -765,12 +910,12 @@ function TextureButton:update()
             self.isHovered = true
 
             if self._postHover ~= true then
-                self.sHovered:emit()
+                self:getSignal("Hovered"):emit()
                 self._postHover = true
             end
 
             if input:pressed('ui_clickLeft') then
-                self.sPressed:emit()
+                self:getSignal("Pressed"):emit()
                 if self.pressedFunction ~= nil then
                     --self:pressedFunction()
                 end
@@ -930,7 +1075,56 @@ function Camera:toScreenPosition(x, y)
     return x - self.position.x, y - self.position.y
 end
 
---GAME SPECIAL CLASSES
+
+local Particles = class({
+    name = "Particles",
+    extends = Entity
+})
+
+function Particles:new(particles, x, y)
+    self:super(x, y)
+    self.particles = particles
+    self.system = particles[1].system
+
+
+
+    self.emitting = true
+    self.particleRate = 32
+    self.emitOnce = false
+    self._emitted = false
+end
+
+function Particles:update(dt)
+    self.system:update(dt)
+end
+
+function Particles:setSpeed(num)
+    self.system:setSpeed(num)
+end
+
+function Particles:emit(num)
+    self.system:emit(num or 16)
+end
+
+function Particles:setEmissionRate(num)
+    self.system:setEmissionRate(num)
+end
+
+function Particles:draw()
+    love.graphics.draw(self.system, self.position.x, self.position.y)
+end
+
+function Particles:getsystem()
+    return self.system
+end
+
+function Particles:destroy()
+    self.system:release()
+end
+
+-------------------------------------------------------------
+--GAME SPECIAL CLASSES---------------------------------------
+-------------------------------------------------------------
 
 --Class BuildingFlower
 local BuildingFlower = class({
@@ -940,34 +1134,40 @@ local BuildingFlower = class({
 
 function BuildingFlower:new(x, y)
     self:super(x, y)
-
-    self.bigFlower = getFirstObjectFromGroup("bigflower")
     self.cps = 0.2
     self.count = 0
     self.itemId = 1
     self.price = 0
     self.basePrice = 10
+    self.clickXpBuyValue = 0
+
+    self.bigFlower = nil
+    self.characterEventManager = nil
 
 
 
      --Needs buttons for buying and selling buildings
     addObject(Sprite(assets.images.itemframe, self.position.x, self.position.y))
     local sprite = Sprite(assets.images.yellowflower, self.position.x, self.position.y)
+    --sprite:setShearX(1.1)
+    sprite:setOriginX(32)
+    sprite:setOriginY(32)
     self.sprite = sprite
     addObject(sprite)
 end
 
 function BuildingFlower:ready()
-
+    self.bigFlower = getFirstObjectFromGroup("bigflower")
+    self.characterEventManager = getFirstObjectFromGroup("charactereventmanager")
 
     local buyButton = TextureButton(assets.images.buyButtonNormal, self.position.x - 20, self.position.y + 50)
     buyButton:setTextureHover(assets.images.buyButtonHover)
     buyButton:setTexturePressed(assets.images.buyButtonPressed)
-    buyButton.sPressed:connect(self.buyItem, self)
+    buyButton:getSignal("Pressed"):connect(self.buyItem, self)
     self.buyButton = buyButton
     addObject(buyButton)
     local sellButton = TextureButton(assets.images.sellButtonNormal, self.position.x + 30, self.position.y + 50)
-    sellButton.sPressed:connect(self.sellItem, self)
+    sellButton:getSignal("Pressed"):connect(self.sellItem, self)
     sellButton:setTextureHover(assets.images.sellButtonHover)
     sellButton:setTexturePressed(assets.images.sellButtonPressed)
     self.sellButton = sellButton
@@ -984,11 +1184,20 @@ function BuildingFlower:ready()
     --ddObject(ColorShape(CircleShape(4), self.position.x, self.position.y))
 end
 
+function BuildingFlower:destroy()
+    self.buyButton:queueDestroy()
+    self.sellButton:queueDestroy()
+    self.priceLabel:queueDestroy()
+    self.sprite:queueDestroy()
+end
+
 function BuildingFlower:buyItem()
     if self.bigFlower then
         if self.bigFlower.count >= self.price then
             self.bigFlower.count = self.bigFlower.count - self.price
             self.count = self.count + 1
+            self.bigFlower.clickXp = self.bigFlower.clickXp + self.clickXpBuyValue
+            self.sprite.shearX = 0.2
         end
     end
 end
@@ -1004,10 +1213,19 @@ end
 
 function BuildingFlower:update(dt)
     self.price = self.basePrice * (1.4^self.count)
+    self.clickXpBuyValue = self.price * 0.2
     local pricestring = tostring(self.price)
     pricestring = pricestring:sub(1, 6)
     self.priceLabel:setText(pricestring)
-    self.bigFlower.count = self.bigFlower.count + (self.cps * self.count )* dt
+
+    --update sprite shear
+    flux.to(self.sprite, 0.1, {shearX = 0})
+
+
+    if not self.characterEventManager.isInEvent then
+        self.bigFlower.count = self.bigFlower.count + (self.cps * self.count )* dt
+        self.bigFlower.tempCps = self.bigFlower.tempCps + (self.cps * self.count)
+    end
 end
 
 
@@ -1024,10 +1242,39 @@ function BigFlower:new(x, y)
     --self:addChild(sprite)
     self.sprite1 = sprite
 
+    self.clickLevel = 1
+    self.clickPower = 1
+    self.clickXp = 0
+    self.clickXpNextLevel = 100
+
+    local xplabel = addObject(Label("0", 10, 300))
+    self.xpLabel = xplabel
+    xplabel:setFont(assets.fonts.it32)
+    xplabel:setDrawToGui(true)
+
+    local nextXplabel = addObject(Label("50", 10, 330))
+    nextXplabel:setFont(assets.fonts.it32)
+    nextXplabel:setDrawToGui(true)
+    self.nextXpLabel = nextXplabel
+
+    local levelLabel = addObject(Label("1", 10, 40))
+    levelLabel:setDrawToGui(true)
+    levelLabel:setFont(assets.fonts.it32)
+    self.levelLabel = levelLabel
+
+    local cpsLabel = addObject(Label("0", 10, 20))
+    cpsLabel:setDrawToGui(true)
+    cpsLabel:setFont(assets.fonts.it32)
+    self.cpsLabel = cpsLabel
+
     local stem = Sprite(assets.images.stem, 0, 50)
+    self.stemSprite = stem
     self:addChild(stem)
 
     local flowerhead = Sprite(assets.images.flowerhead, 10, 10)
+    self.flowerheadSprite = flowerhead
+    self.flowerheadSprite:setOriginX(64)
+    flowerhead:setOriginY(64)
     self:addChild(flowerhead)
     
     local count = Label("0", 10, 0)
@@ -1040,6 +1287,10 @@ function BigFlower:new(x, y)
     addObject(count)
     self.countText = count
     count.flower = self
+
+    self.particles = Particles(assets.particles.growpart, self.position.x + 100, self.position.y + 100)
+    self.particles:setEmissionRate(0)
+    addObject(self.particles)
 
     local startClickText = Label("START CLICKING", 0, -30)
     startClickText:setScript(require 'scripts.startText')
@@ -1058,17 +1309,83 @@ function BigFlower:new(x, y)
     self.startClickText = startClickText
 
     self.count = 1
+    self.tempCps = 0
+    self.prevTempcps = 0
+
+    self.characterEventManager = nil
 end
 
 function BigFlower:ready()
+    self.characterEventManager = getFirstObjectFromGroup("charactereventmanager")
 
+    self.clickStreakNum = 0
+    self.clickStreakResetTimer = 0
 end
 
 function BigFlower:update(dt)
-    if input:pressed('clickLeft') then
-        self.count = self.count + 1
+
+    self.prevTempcps = self.tempCps
+
+    self.clickStreakResetTimer = self.clickStreakResetTimer - dt
+    if self.clickStreakResetTimer < 0 then 
+        self.clickStreakNum = 0
     end
-    self.countText:setText(math.floor(self.count))
+
+    if not self.characterEventManager.isInEvent then
+        flux.to(self.flowerheadSprite.scale, 0.1, {x = 1, y = 1})
+        if input:pressed('clickLeft') then
+            self.count = self.count + self.clickPower
+
+            self.clickStreakNum = self.clickStreakNum + 1
+
+
+            self.flowerheadSprite.scale.x = 1.2
+            self.flowerheadSprite.scale.y = 1.2
+            self.clickStreakResetTimer = 0.5
+            print(self.clickStreakNum)
+
+            self.clickXp = self.clickXp + self.clickPower * 0.1
+
+            if self.clickStreakNum > 30 then
+        
+            end
+        end
+
+        local emissionRate = self.tempCps - 100
+        if emissionRate < 0 then
+            emissionRate = 0
+        end
+
+        self.clickXp = self.clickXp + (self.tempCps * 0.05) * dt
+        print(self.clickXp)
+
+        if self.clickXp >= self.clickXpNextLevel then
+            self:levelUp()
+        end
+
+        self.xpLabel:setText(math.floor(self.clickXp))
+        self.nextXpLabel:setText(math.floor(self.clickXpNextLevel))
+
+        local clickPowerFormated = tostring(self.clickPower):sub(1, 4)
+
+        self.levelLabel:setText(clickPowerFormated.."("..self.clickLevel..")")
+        self.cpsLabel:setText(self.tempCps)
+
+        self.particles:getsystem():setEmissionRate(emissionRate)
+
+        self.tempCps = 0
+
+        self.countText:setText(math.floor(self.count))
+    else
+        self.countText:setText("")
+    end
+end
+
+function BigFlower:levelUp()
+    self.clickXp = 0
+    self.clickLevel = self.clickLevel + 1
+    self.clickXpNextLevel = 100 * (1.4^self.clickLevel)
+    self.clickPower = 1 + self.clickPower + self.clickPower * 0.1
 end
 
 --Class GameCamera
@@ -1079,23 +1396,27 @@ local GameCamera = class({
 
 function GameCamera:new(x, y)
     self:super(x, y)
+    self.camTargetX = self.position.x or 0
     self.camTargetY = self.position.y or 0
-    self.targetArea = "menu" --menu will be the downwards one
-
-end
-
-function GameCamera:switchMenu()
-    if self.targetArea == 'menu' then
-        self.camTargetY = 200
-        self.targetArea = 'main'
-    elseif self.targetArea == 'main' then
-        self.camTargetY = 0
-        self.targetArea = 'menu'
-    end
+    self.targetArea = 1 --menu will be the downwards one
 end
 
 function GameCamera:update(dt)
     --self.position.y = self.camTargetY
+    self.targetArea = self.cameraman.state
+
+    if self.targetArea == self.cameraman.states.main then
+        self.camTargetY = 0
+        self.camTargetX = 0
+    elseif self.targetArea == self.cameraman.states.flowermenu then
+        self.camTargetY = 200
+        self.camTargetX = 0
+    elseif self.targetArea == self.cameraman.states.characterevent then
+        self.camTargetX = 640
+        self.camTargetY = 0
+    end
+
+    flux.to(self.position, 0.2, {x = self.camTargetX})
     flux.to(self.position, 0.2, {y = self.camTargetY})
 end
 
@@ -1105,28 +1426,54 @@ local DialougeBox = class({
     extends = Entity
 })
 
+local function sayHi()
+    print("I LOVE YOU MISTER")
+end
+
 function DialougeBox:new(x, y)
 
-    self.testString = "This will be fun, I really really \n hope so to the moon and back"
+    self.testString = "This will be fun, I really hope so"
+
+    self.active = false
+
+    self.functionsTable = {
+        sayHi
+    }
 
     self:super(x, y)
     self.textStrings = {}
+    self._textLetters = {}
     self.textStringIndex = 1
+
     self.charactersShowing = 1
     self.previouscharactersShowing = self.charactersShowing
+    self:addSignal("TextSkip")
+    self:addSignal("TextboxEnd")
+    self:addSignal("TextboxStart")
+
+
+    self.truetextShown = ""
 
     self.textWriteDelay = 0.1
 
+    self.cameraman = nil
+
     self.boxSprite = nil
-    self.textLabel = Label("Test", x, y)
-    self.border = addObject(ColorShape(RectShape(640, 120), 0, 250, Color(0.3, 0.3, 0.3), 1))
-    self.box = addObject(ColorShape(RectShape(460, 100), 80, 250, Color(Color.Black), 1))
-    self.nameTag = addObject(Label("Bunny:", 90, 250))
+    self.border = addObject(ColorShape(RectShape(640, 120), self.position.x + 0, self.position.y + 250, Color(0.3, 0.3, 0.3), 1))
+    self.border.offX, self.border.offY = self.border.position.x, self.border.position.y
+    self.box = addObject(ColorShape(RectShape(460, 100), self.position.x + 80, self.position.y + 250, Color(Color.Black), 1))
+    self.box.offX, self.box.offY = self.box.position.x, self.box.position.y
+    self.nameTag = addObject(Label("Bunny:", self.position.x + 90, self.position.y + 250))
+    self.nameTag.offX, self.nameTag.offY = self.nameTag.position.x, self.nameTag.position.y
     self.nameTag:setFont(assets.fonts.sl32)
-    self.text = addObject(Label("This will be fun, I really\n hope so.", 90, 250 + 32))
+    self.text = addObject(Label("This will be fun, I really hope so.", self.position.x + 90, self.position.y + 250 + 32))
+    self.text.offX, self.text.offY = self.text.position.x, self.text.position.y
     self.text:setWrapLimit(450)
     self.text:setFont(assets.fonts.sl32)
 
+
+    self._parsedFunctions = {}
+    self._currentIndexedRealString = nil
     self._letterFont = assets.fonts.sl32
     self._fontWidth = 16
     self._fontHeight = 32
@@ -1135,53 +1482,242 @@ function DialougeBox:new(x, y)
     self._letterIndex = 1
 end
 
+function DialougeBox:_performFunction(arg)
+
+
+
+
+    print("PLEASE WORK")
+    arg = tonumber(arg)
+    local fn = self.functionsTable[arg or 1]
+    fn()
+end
+
+function DialougeBox:_parseString(string)
+    local realstring = ""
+    local parsingCommand = false
+    local parsingArg = false
+    local commandString = ""
+    local functionString = ""
+    local argString = ""
+    local subtractedPos = 0
+
+    local command = {fn = nil, arg = nil, pos = nil}
+    for i=1, string:len() do
+        local letter = string:sub(i, i)
+        
+        --Begin command memory mode
+        if letter == "[" then
+            parsingArg = false
+            parsingCommand = true
+            command.pos = i - subtractedPos - 1
+        end
+
+        --end command memory mode
+        if letter == ']' then
+            parsingCommand = false
+            parsingArg = false
+            command.fn = functionString
+            command.arg = argString
+
+            print(functionString)
+            print(argString)
+            print(realstring)
+            
+            table.insert(self._parsedFunctions, command)
+
+            --reset command string
+            functionString = ""
+            argString = ""
+        end
+
+        if parsingCommand then
+
+            if (letter ~= "[" and letter ~= "]" and letter ~= ":") and parsingArg == false then
+                functionString = functionString..letter
+            end
+
+            if (letter ~= "[" and letter ~= "]" and letter ~= ":") and parsingArg == true then
+                argString = argString..letter
+            end
+
+            subtractedPos = subtractedPos + 1
+
+            if letter == ":" then
+                parsingArg = true
+            end
+        else
+            if letter ~= "]" then
+                realstring = realstring..letter
+            end
+        end
+    end
+
+    print(realstring)
+    return realstring
+end
+
 function DialougeBox:spawnLetter(x, y, index)
-    local string = self.testString
+    local string = self._currentIndexedRealString
+    if string == nil and self.textStrings[self.textStringIndex] ~= nil then
+        string = self:_parseString(self.textStrings[self.textStringIndex])
+        self._currentIndexedRealString = string
+    end
+
 
     local letter = string:sub(index, index)
-    local nextletter = string:sub(index + 1, index + 1)
-    print("letter "..letter)
+    local doNotAddLetter = false
 
 
-    self.textWriteDelay = 0.02
-
-    local label = Label(letter, x, y+10)
-    label.targetPositionY = y
-    label:setScript(require 'scripts.letterSlideUp')
-    label:setText(letter)
-    label:setFont(self.text:getFont())
-    addObject(label)
-
-    local fontoffy = self._letterFont:getHeight(letter)
-    local fontoffx = self._letterFont:getWidth(letter)
-
-    if letter == "\n" then
-        self._letterX = 0
-        self._letterY = self._letterY + fontoffy
+    for i, v in ipairs(self._parsedFunctions) do
+        if index == v.pos then
+            print(v.arg)
+            self:_performFunction(v.arg)
+            print("Should be working")
+        end
     end
 
-    if letter == "." then
-        self.textWriteDelay = 0.1
-    end
+    if doNotAddLetter == false then
+        self.textWriteDelay = 0.02
 
-    self._letterX = self._letterX + fontoffx
-    self._letterIndex = self._letterIndex + 1
+        if letter ~= "" then
+            local label = Label(letter, x, y+10)
+            self:getSignal("TextSkip"):connect(label.queueDestroy, label)
+            self:getSignal("TextSkip"):connect(label.setAlpha, label)
+            label.lettersTable = self._textLetters
+            label.targetPositionY = y
+            label:setScript(require 'scripts.letterSlideUp')
+            label:setText(letter)
+            label:setFont(self.text:getFont())
+            addObject(label)
+        end
+
+        local fontoffy = self._letterFont:getHeight(letter)
+        local fontoffx = self._letterFont:getWidth(letter)
+
+        if letter == "\n" then
+            self._letterX = 0
+            self._letterY = self._letterY + fontoffy
+        end
+
+        if letter == "." then
+            self.textWriteDelay = 0.1
+        end
+
+        self._letterX = self._letterX + fontoffx
+        self._letterIndex = self._letterIndex + 1
+    end
+end
+
+function DialougeBox:ready()
+    if self.cameraman == nil then
+        self.cameraman = getFirstObjectFromGroup("cameraman")
+    end
+    --self.cameraman.state = self.cameraman.states.characterevent
 end
 
 function DialougeBox:update(dt)
-    self.previousCharactersShowing = self.charactersShowing
-    self.textWriteDelay = self.textWriteDelay - dt
-    if self.textWriteDelay <= 0 then
-        self.charactersShowing = self.charactersShowing + 1
-        self:spawnLetter(self.text.position.x + (self._letterX), self.text.position.y + self._letterY, self._letterIndex)
+    if self.active == true then
+        self.previousCharactersShowing = self.charactersShowing
+
+        if self.textStrings[self.textStringIndex] ~= nil then
+            self.textWriteDelay = self.textWriteDelay - dt
+
+            if self.textWriteDelay <= 0 then
+                self.charactersShowing = self.charactersShowing + 1
+                self:spawnLetter(self.text.position.x + (self._letterX), self.text.position.y + self._letterY, self._letterIndex)
+            end
+        end
+
+        if self.textStrings[self.textStringIndex] == nil then
+            self:endTextbox()
+        end
+
+            --Controls
+        if input:pressed("clickLeft") then
+            if self.textStrings[self.textStringIndex + 1] ~= nil and self._currentIndexedRealString ~= nil then
+                if #self._textLetters >= self._currentIndexedRealString:len() then
+                    self:advanceText()
+                end
+            else
+                self:endTextbox()
+            end
+        end
     end
 
+    self:updateParts()
+    local lettertable = self._textLetters
+
+
+
+    --self.text:setText(self.truetextShown)
     self.text:setVisibleCharacterLimit(math.floor(0))
 end
 
-function DialougeBox:advanceText()
+function DialougeBox:endTextbox()
+    print("SOMETHING AWESOME")
+    self:getSignal("TextboxEnd"):emit()
+    flux.to(self.position, 1, {y = 360})
+    print(self.position.y)
+    self.active = false
+end
+
+function DialougeBox:setNameTag(text)
+    self.nameTag:setText(tostring(text))
+end
+
+function DialougeBox:startTextBox(table)
+    self:reset()
+    self:getSignal("TextboxStart"):emit()
+    flux.to(self.position, 1, {y = 0})
+
+    if table then
+        for i=1, #table do
+            self.textStrings[i] = tostring(table[i])
+        end
+    end
+    self.active = true
+end
+
+function DialougeBox:updateParts()
+    self.border.position.x, self.border.position.y = self.position.x + self.border.offX, self.position.y + self.border.offY
+    self.box.position.x, self.box.position.y = self.position.x + self.box.offX, self.position.y + self.box.offY
+    self.nameTag.position.x, self.nameTag.position.y = self.position.x + self.nameTag.offX, self.position.y + self.nameTag.offY
+    self.text.position.x, self.text.position.y = self.position.x + self.text.offX, self.position.y + self.text.offY
+end
+
+function DialougeBox:skipTextToEnd()
+    self.truetextShown = self.textStrings[self.textStringIndex]
     self.charactersShowing = 1
-    self.textStringIndex = self.textStringIndex + 1
+    self._letterX = 0
+    self._letterY = 0
+    self._letterIndex = 0
+    self:getSignal("TextSkip"):emit(0)
+end
+
+function DialougeBox:advanceText()
+    if self.textStrings[self.textStringIndex + 1] ~= nil then
+        self._currentIndexedRealString = nil --reset
+        self.charactersShowing = 1
+        self.textStringIndex = self.textStringIndex + 1
+        self._letterX = 0
+        self._letterY = 0
+        self._letterIndex = 0
+        self.truetextShown = ""
+
+
+
+        for i = #self._textLetters, 1, -1 do
+        local letter = table.shift(self._textLetters)
+
+        --print(letter.text)
+        
+        --local texttoadd = letter.text or "Er"
+        letter:queueDestroy()
+        end
+        table.clear(self._textLetters)
+
+    end
 end
 
 function DialougeBox:setIndexedText(string, index)
@@ -1190,8 +1726,14 @@ function DialougeBox:setIndexedText(string, index)
 end
 
 function DialougeBox:reset()
+    table.clear(self.textStrings)
+    self._currentIndexedRealString = nil --reset
     self.charactersShowing = 1
     self.textStringIndex = 1
+    self._letterX = 0
+    self._letterY = 0
+    self._letterIndex = 0
+    self.truetextShown = ""
 end
 
 --Class CharacterEvent
@@ -1201,7 +1743,70 @@ local CharacterEventManager = class({
 })
 
 function CharacterEventManager:new()
-    self.sActivate = Signal()
+    self:super()
+    self:addSignal("NewEvent")
+    addObjectToGroup("charactereventmanager", self)
+    self.cameraman = nil
+    self.bigflower = nil
+    self.characters = {}
+    self.dialougebox = addObject(DialougeBox(320, 0)) --Spawn a dialouge box on the right side of the screen
+    self.dialougebox:getSignal("TextboxStart")
+    self.dialougebox:getSignal("TextboxEnd"):connect(self.textboxend, self)
+    self.dialougebox.eventmanager = self
+
+    self.textbox = self.dialougebox
+    self.isInEvent = false
+
+    self.characterEventFlags = {
+        goal1 = false,
+        goal2 = false,
+        goal3 = false
+    }
+end
+
+function CharacterEventManager:ready()
+    if self.cameraman == nil then
+        self.cameraman = getFirstObjectFromGroup("cameraman")
+    end
+    if self.bigflower == nil then
+        self.bigflower = getFirstObjectFromGroup("bigflower")
+    end
+end
+
+function CharacterEventManager:update(dt)
+    local count = self.bigflower.count
+
+    if count >= 100000000000000 and self.characterEventFlags.goal1 == false then
+        self.isInEvent = true
+        self.cameraman.state = 3
+        self.characterEventFlags.goal1 = true
+        self.textbox:startTextBox(
+            {
+                "Hello[fn:1] how are [fn:1]you [fn:1]doing?",
+                "I hope its a fine and lovely \nevening.",
+                "...We [fn:1]gotta keep growing the \ngarden.",
+                "Make it big and strong before \nnightfall.",
+                "Why is that you ask?",
+                "Hehe Uh... Ill tell you later.",
+                "Just keep going for a while."
+            }
+        )
+    end
+end
+
+function CharacterEventManager:textboxend()
+    if self.cameraman then
+        self.cameraman.state = 1
+    end
+    self.isInEvent = false
+    print("Ended")
+end
+
+--Events need to have .texts, .characters, and a .functions table
+function CharacterEventManager:newEvent(event)
+    self.characters = event.characters
+    self.texts = event.texts
+    self.functions = event.functions
 end
 
 --Class MusicPlayer
@@ -1237,15 +1842,57 @@ local CameraStateManager = class({
 })
 
 function CameraStateManager:new()
+    addObjectToGroup("cameraman", self)
     self.states = {
         main = 1,
         flowermenu = 2,
         characterevent = 3,
     }
+    self.state = self.states.main
 end
+
+local WeirdWorm = class({
+    name = "WeirdWorm",
+    extends = Entity
+})
+
+function WeirdWorm:new(x, y)
+    self:super(x, y)
+    self.size.x = 64
+    self.size.y = 64
+
+    self.bigflower = nil
+    self.sprite = Sprite(assets.images.weirdWorm)
+    self.countToGive = 0
+
+    self.clickSound = SourcePlayer(assets.sounds.twinkle)
+end
+
+function WeirdWorm:destroy()
+    self.sprite:queueDestroy()
+    self.clickSound:queueDestroy()
+end
+
+function WeirdWorm:ready()
+    self.bigflower = getFirstObjectFromGroup("BigFlower")
+end
+
+function WeirdWorm:update(dt)
+    if PointAABB(worldMouseX, worldMouseY, self.position.x, self.position.y, self.scale.x, self.scale.y) then
+        if input:pressed("clickLeft") then
+            self:queueDestroy()
+            self.bigflower.count = self.bigflower.count + (self.bigflower.prevTempcps) * 60
+            self.bigflower.clickXp = self.bigflower.clickXp + (self.bigflower.prevTempcps) * 20
+            self.clickSound:play()
+        end
+    end
+end
+
 --------------------------------------------------------
 
 local Game = Object()
+Game.worms = {}
+Game.worms[1] = {x = 50, y = 200, worm = nil}
 Game:setScript(require 'scripts.game')
 table.insert(entities, Game)
 
@@ -1255,12 +1902,17 @@ addObject(gamebg)
 local grassbg = addObject(Sprite(assets.images.grassbg))
 
 --GAME
-local bigFlower = BigFlower()
+
+local charactereventmanager = CharacterEventManager()
+addObject(charactereventmanager)
+
+
+local bigFlower = BigFlower(200, 150)
 bigFlower.position.x = 200
 bigFlower.position.y = 150
 addObject(bigFlower)
 
-local countHintText1 = Label("<-- get this to 100", 60, 0)
+local countHintText1 = Label("<-- get this to 100000", 60, 0)
 countHintText1:setScript(require 'scripts.counthinttext')
 countHintText1:setFont(assets.fonts.it32)
 countHintText1:setAlpha(0)
@@ -1272,17 +1924,31 @@ countHintText1.state = 1
 countHintText1.targetx = 50
 countHintText1.originPos = {x = countHintText1.position.x, countHintText1.position.y}
 addObject(countHintText1)
-
+local cameramanager = CameraStateManager()
 local camera = GameCamera(0, 0)
+camera.cameraman = cameramanager
 addObject(camera)
 setCamera(camera)
 
 local musicplayer = MusicPlayer()
 local musday = SourcePlayer(assets.music.daytheme, 1, true)
 musicplayer:play(musday)
-addObject(musicplayer)
+--addObject(musicplayer)
+
+
 
 local buildingShop = Entity(0, 360)
+buildingShop.cameraman = cameramanager
+buildingShop.toggleMenu = function(self)
+    if self.isShowingMenu == true then
+        self.isShowingMenu = false
+        self.cameraman.state = self.cameraman.states.main
+    elseif self.isShowingMenu == false then
+        self.isShowingMenu = true
+        self.cameraman.state = self.cameraman.states.flowermenu
+    end
+end
+
 buildingShop.choices = {}
 local bg = Sprite(assets.images.buildingboardbg, buildingShop.position.x, buildingShop.position.y)
 addObject(bg)
@@ -1321,11 +1987,10 @@ local ystart = buildingShop.position.y + 5
     c1.cps = 40
     addObject(c1)
 buildingShop.menuButton = addObject(TextureButton(assets.images.buildingboardbutton, 300, 350))
-buildingShop.menuButton.sHovered:connect(camera.switchMenu, camera)
+buildingShop.isShowingMenu = false
+buildingShop.menuButton:getSignal("Hovered"):connect(buildingShop.toggleMenu, buildingShop)
 
 --local bunny = addObject(Sprite(assets.images.pinkbunny, 0, 0))
-
---addObject(DialougeBox())
 
 
 
@@ -1337,6 +2002,8 @@ function love.update(dt)
     flux.update(dt)
     input:update()
     updateScale()
+
+    --table.sort(entities, sortByCreatedAt)
 
     for i, v in ipairs(entities) do
         if v._postReady ~= true then
@@ -1358,7 +2025,14 @@ function love.update(dt)
         if v.updateChildren then
             v:updateChildren(dt) -- Update children
         end
+
     end
+
+    --Destroy Objects at the end of update
+    for i, v in ipairs(_destroyQueue) do
+        v:_destroyObject()
+    end
+    table.clear(_destroyQueue)
 end
 
 function love.draw()
@@ -1367,6 +2041,7 @@ function love.draw()
 
     --Camera
     love.graphics.push()
+    --love.graphics.setProjection(1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1)
     if Engine._currentCamera then
         local cam = Engine._currentCamera
         love.graphics.translate(-cam.position.x, -cam.position.y)
@@ -1403,7 +2078,7 @@ function love.draw()
     --Draw game canvas
     love.graphics.draw(gameCanvas, love.graphics.getWidth() / 2, love.graphics.getHeight() / 2, 0, scale, scale, gameCanvas:getWidth() / 2, gameCanvas:getHeight() / 2)
 
-    --Draw game canvas
+    --Draw gui canvas
     love.graphics.draw(uiCanvas, love.graphics.getWidth() / 2, love.graphics.getHeight() / 2, 0, scale, scale, gameCanvas:getWidth() / 2, gameCanvas:getHeight() / 2)
 
     --

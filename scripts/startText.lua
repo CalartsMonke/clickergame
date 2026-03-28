@@ -1,5 +1,6 @@
+local script = {}
 
-local func = function(self, dt)
+function script.update(self, dt)
     if self.position.y + self.parent.position.y > 20 then
         self.position.y = self.position.y - dt * 20        
     end
@@ -11,4 +12,4 @@ local func = function(self, dt)
 end
 
 
-return func
+return script
