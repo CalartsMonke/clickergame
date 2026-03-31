@@ -1,4 +1,6 @@
-local fn = function(self, dt)
+local script = {}
+
+function script.update(self, dt)
     local flower = self.flower
     self.timer = self.timer - dt
 
@@ -29,9 +31,6 @@ local fn = function(self, dt)
         self.alpha = self.alpha - 0.3 * dt
     end
 
-
-
-
 end
 
-return fn
+return script

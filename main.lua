@@ -12,6 +12,7 @@ require("libs.batteries"):export()
 local Engine = {}
 Engine._currentCamera = nil
 Engine._signals = {}
+Engine._currentScene = nil
 
 function setCamera(cam)
     Engine._currentCamera = cam
@@ -74,9 +75,12 @@ assets.images.itemframe = love.graphics.newImage("img/itemframe.png")
 
 assets.particles = {}
 assets.particles.growpart = require 'particles.growpart'
+assets.particles.levelstars = require 'particles.levelstars'
 
 assets.sounds = {}
 assets.sounds.twinkle = love.audio.newSource("sounds/twinkle.wav", 'static')
+assets.sounds.twinkle2 = love.audio.newSource("sounds/twinkle2.wav", 'static')
+assets.sounds.penscratch = love.audio.newSource("sounds/penscratch.mp3", 'static')
 
 assets.music = {}
 assets.music.daytheme = love.audio.newSource("music/p2yukino.mp3", 'stream')
@@ -293,6 +297,10 @@ function Object:addChild(child)
     table.push(self.children, child)
 
     --Cache global pos
+end
+
+function Object.addObject(object)
+    return addObject(object)
 end
 
 function Object:setDrawToGui(bool)
@@ -632,6 +640,7 @@ end
 Color.Red = Color(1, 0, 0)
 Color.Green = Color(0, 1, 0)
 Color.Blue = Color(0, 0, 1)
+Color.Yellow = Color(1, 1, 0)
 Color.White = Color(1, 1, 1)
 Color.Black = Color(0, 0, 0)
 
@@ -753,6 +762,10 @@ end
 
 function Label:setAlpha(num)
     self.alpha = num
+end
+
+function Label:setColor(Color)
+    self.color = Color
 end
 
 function Label:setText(text)
@@ -1036,7 +1049,12 @@ function SourcePlayer:new(source, vol, loops)
 end
 
 function SourcePlayer:play()
+    self.source:stop()
     self.source:play()
+end
+
+function SourcePlayer:setPitch(num)
+    self.source:setPitch(num)
 end
 
 function  SourcePlayer:setLooping(bool)
@@ -1271,6 +1289,14 @@ function BigFlower:new(x, y)
     self.stemSprite = stem
     self:addChild(stem)
 
+    local levelUpLabel = addObject(Label("LEVEL UP!", 0, -10))
+    levelUpLabel:setFont(assets.fonts.it32)
+    levelUpLabel:setScript(require 'scripts.leveluplabel')
+    levelUpLabel.color1 = Color(Color.White)
+    levelUpLabel.color2 = Color(Color.Yellow)
+    levelUpLabel:setDrawToGui(true)
+    self.levelUpLabel = levelUpLabel
+
     local flowerhead = Sprite(assets.images.flowerhead, 10, 10)
     self.flowerheadSprite = flowerhead
     self.flowerheadSprite:setOriginX(64)
@@ -1292,6 +1318,11 @@ function BigFlower:new(x, y)
     self.particles:setEmissionRate(0)
     addObject(self.particles)
 
+    local levelparticles = Particles(assets.particles.levelstars, self.position.x + 100, self.position.y + 100)
+    addObject(levelparticles)
+    levelparticles:setEmissionRate(0)
+    self.levelParticles = levelparticles
+
     local startClickText = Label("START CLICKING", 0, -30)
     startClickText:setScript(require 'scripts.startText')
     startClickText:setFont(assets.fonts.it32)
@@ -1307,6 +1338,9 @@ function BigFlower:new(x, y)
     startClickText.timer2 = 12
     self:addChild(startClickText)
     self.startClickText = startClickText
+
+
+    self.levelSound = SourcePlayer(assets.sounds.twinkle2)
 
     self.count = 1
     self.tempCps = 0
@@ -1342,7 +1376,6 @@ function BigFlower:update(dt)
             self.flowerheadSprite.scale.x = 1.2
             self.flowerheadSprite.scale.y = 1.2
             self.clickStreakResetTimer = 0.5
-            print(self.clickStreakNum)
 
             self.clickXp = self.clickXp + self.clickPower * 0.1
 
@@ -1357,7 +1390,6 @@ function BigFlower:update(dt)
         end
 
         self.clickXp = self.clickXp + (self.tempCps * 0.05) * dt
-        print(self.clickXp)
 
         if self.clickXp >= self.clickXpNextLevel then
             self:levelUp()
@@ -1373,6 +1405,8 @@ function BigFlower:update(dt)
 
         self.particles:getsystem():setEmissionRate(emissionRate)
 
+
+
         self.tempCps = 0
 
         self.countText:setText(math.floor(self.count))
@@ -1386,6 +1420,15 @@ function BigFlower:levelUp()
     self.clickLevel = self.clickLevel + 1
     self.clickXpNextLevel = 100 * (1.4^self.clickLevel)
     self.clickPower = 1 + self.clickPower + self.clickPower * 0.1
+    self.levelParticles.position.x = worldMouseX
+    self.levelParticles.position.y = worldMouseY
+    self.levelParticles:emit(8)
+    self.levelSound:play()
+    
+    self.levelUpLabel.superTimer = 3
+    self.levelUpLabel.position.x = screenMouseX
+    self.levelUpLabel.position.y = screenMouseY
+
 end
 
 --Class GameCamera
@@ -1434,6 +1477,9 @@ function DialougeBox:new(x, y)
 
     self.testString = "This will be fun, I really hope so"
 
+
+    self.targetY = 0
+
     self.active = false
 
     self.functionsTable = {
@@ -1455,6 +1501,7 @@ function DialougeBox:new(x, y)
     self.truetextShown = ""
 
     self.textWriteDelay = 0.1
+    self.textSoundDelay = 0.2
 
     self.cameraman = nil
 
@@ -1470,8 +1517,10 @@ function DialougeBox:new(x, y)
     self.text.offX, self.text.offY = self.text.position.x, self.text.position.y
     self.text:setWrapLimit(450)
     self.text:setFont(assets.fonts.sl32)
+    self.talkSound1 = SourcePlayer(assets.sounds.penscratch, 0.5, false)
 
 
+    self._textSkip = false
     self._parsedFunctions = {}
     self._currentIndexedRealString = nil
     self._letterFont = assets.fonts.sl32
@@ -1483,11 +1532,6 @@ function DialougeBox:new(x, y)
 end
 
 function DialougeBox:_performFunction(arg)
-
-
-
-
-    print("PLEASE WORK")
     arg = tonumber(arg)
     local fn = self.functionsTable[arg or 1]
     fn()
@@ -1519,10 +1563,6 @@ function DialougeBox:_parseString(string)
             parsingArg = false
             command.fn = functionString
             command.arg = argString
-
-            print(functionString)
-            print(argString)
-            print(realstring)
             
             table.insert(self._parsedFunctions, command)
 
@@ -1553,7 +1593,6 @@ function DialougeBox:_parseString(string)
         end
     end
 
-    print(realstring)
     return realstring
 end
 
@@ -1561,6 +1600,7 @@ function DialougeBox:spawnLetter(x, y, index)
     local string = self._currentIndexedRealString
     if string == nil and self.textStrings[self.textStringIndex] ~= nil then
         string = self:_parseString(self.textStrings[self.textStringIndex])
+        print(string)
         self._currentIndexedRealString = string
     end
 
@@ -1571,9 +1611,7 @@ function DialougeBox:spawnLetter(x, y, index)
 
     for i, v in ipairs(self._parsedFunctions) do
         if index == v.pos then
-            print(v.arg)
             self:_performFunction(v.arg)
-            print("Should be working")
         end
     end
 
@@ -1585,7 +1623,10 @@ function DialougeBox:spawnLetter(x, y, index)
             self:getSignal("TextSkip"):connect(label.queueDestroy, label)
             self:getSignal("TextSkip"):connect(label.setAlpha, label)
             label.lettersTable = self._textLetters
+            table.insert(self._textLetters, label)
             label.targetPositionY = y
+            label.targetPositionX = x
+            label.offX, label.offY = x, y
             label:setScript(require 'scripts.letterSlideUp')
             label:setText(letter)
             label:setFont(self.text:getFont())
@@ -1604,6 +1645,22 @@ function DialougeBox:spawnLetter(x, y, index)
             self.textWriteDelay = 0.1
         end
 
+        if letter ~= '.' and letter ~= '/n' and letter ~= '' then
+            if self.textSoundDelay <= 0 then
+                if true then
+                    local sound = love.audio.newSource('sounds/penscratch.mp3', 'static')
+                    sound:setVolume(0.3)
+                    sound:setPitch(0.4 + love.math.random(100)/100)
+                    sound:play()
+
+
+                    --self.textSoundDelay = 0.1
+                    --self.talkSound1:setPitch()
+                    --self.talkSound1:play()
+                end
+            end
+        end
+
         self._letterX = self._letterX + fontoffx
         self._letterIndex = self._letterIndex + 1
     end
@@ -1617,15 +1674,36 @@ function DialougeBox:ready()
 end
 
 function DialougeBox:update(dt)
+
+    flux.to(self.position, 0.2, {y = self.targetY})
+
     if self.active == true then
         self.previousCharactersShowing = self.charactersShowing
 
         if self.textStrings[self.textStringIndex] ~= nil then
             self.textWriteDelay = self.textWriteDelay - dt
+            self.textSoundDelay = self.textSoundDelay - dt
 
-            if self.textWriteDelay <= 0 then
-                self.charactersShowing = self.charactersShowing + 1
-                self:spawnLetter(self.text.position.x + (self._letterX), self.text.position.y + self._letterY, self._letterIndex)
+            if self._textSkip ~= true then
+                if self.textWriteDelay <= 0 and math.abs(self.targetY - self.position.y) < 0.2  then
+
+                    self.charactersShowing = self.charactersShowing + 1
+                    self:spawnLetter(self.text.position.x + (self._letterX), self.text.position.y + self._letterY, self._letterIndex)
+                end
+            else
+                if true then
+                    while #self._textLetters < self._currentIndexedRealString:len() do
+
+                        self.charactersShowing = self.charactersShowing + 1
+                        self:spawnLetter(self.text.position.x + (self._letterX), self.text.position.y + self._letterY, self._letterIndex)
+
+                        if self.charactersShowing >= self._currentIndexedRealString:len() then
+                            self._textSkip = false
+                            print("BROKE")
+                            break;
+                        end
+                    end
+                end
             end
         end
 
@@ -1640,25 +1718,33 @@ function DialougeBox:update(dt)
                     self:advanceText()
                 end
             else
-                self:endTextbox()
+                if self._currentIndexedRealString then
+                   if #self._textLetters >= self._currentIndexedRealString:len() then
+                        self:endTextbox() 
+                    end
+                end
+            end
+
+
+            if self._currentIndexedRealString and self.charactersShowing > 2 then
+                if #self._textLetters < self._currentIndexedRealString:len() then
+                    self._textSkip = true
+                    print("IS SKIPPING TEXT NOW")
+                end
             end
         end
     end
 
     self:updateParts()
-    local lettertable = self._textLetters
-
-
-
     --self.text:setText(self.truetextShown)
     self.text:setVisibleCharacterLimit(math.floor(0))
 end
 
 function DialougeBox:endTextbox()
     print("SOMETHING AWESOME")
+    self:_cleanlettertable()
     self:getSignal("TextboxEnd"):emit()
-    flux.to(self.position, 1, {y = 360})
-    print(self.position.y)
+    self.targetY = 360
     self.active = false
 end
 
@@ -1669,7 +1755,7 @@ end
 function DialougeBox:startTextBox(table)
     self:reset()
     self:getSignal("TextboxStart"):emit()
-    flux.to(self.position, 1, {y = 0})
+    self.targetY = 0
 
     if table then
         for i=1, #table do
@@ -1684,6 +1770,13 @@ function DialougeBox:updateParts()
     self.box.position.x, self.box.position.y = self.position.x + self.box.offX, self.position.y + self.box.offY
     self.nameTag.position.x, self.nameTag.position.y = self.position.x + self.nameTag.offX, self.position.y + self.nameTag.offY
     self.text.position.x, self.text.position.y = self.position.x + self.text.offX, self.position.y + self.text.offY
+
+    for i=1, #self._textLetters do
+        local letter = self._textLetters[i]
+        if letter ~= nil then
+            --letter.position.x, letter.position.y = self.position.x + letter.offX, self.position.y + letter.offY
+        end
+    end
 end
 
 function DialougeBox:skipTextToEnd()
@@ -1697,27 +1790,26 @@ end
 
 function DialougeBox:advanceText()
     if self.textStrings[self.textStringIndex + 1] ~= nil then
-        self._currentIndexedRealString = nil --reset
+        self._currentIndexedRealString = self.textStrings[self.textStringIndex + 1] --reset
+        self:_parseString(self._currentIndexedRealString)
         self.charactersShowing = 1
         self.textStringIndex = self.textStringIndex + 1
         self._letterX = 0
         self._letterY = 0
         self._letterIndex = 0
         self.truetextShown = ""
-
-
-
-        for i = #self._textLetters, 1, -1 do
-        local letter = table.shift(self._textLetters)
-
-        --print(letter.text)
-        
-        --local texttoadd = letter.text or "Er"
-        letter:queueDestroy()
-        end
-        table.clear(self._textLetters)
-
+        self._textSkip = false
     end
+
+    self:_cleanlettertable()
+end
+
+function DialougeBox:_cleanlettertable()
+    for i = 1, #self._textLetters do
+        local letter = self._textLetters[i]
+        letter:queueDestroy()
+    end
+        table.clear(self._textLetters)
 end
 
 function DialougeBox:setIndexedText(string, index)
@@ -1734,7 +1826,18 @@ function DialougeBox:reset()
     self._letterY = 0
     self._letterIndex = 0
     self.truetextShown = ""
+    self._textSkip = false
 end
+
+--Class CharacterPortrait
+local CharacterPortrait = class({
+    name = "CharacterPortrait",
+    extends = Entity
+})
+
+function CharacterPortrait:new()
+    self:super(0, 0)
+end 
 
 --Class CharacterEvent
 local CharacterEventManager = class({
@@ -1776,19 +1879,48 @@ end
 function CharacterEventManager:update(dt)
     local count = self.bigflower.count
 
-    if count >= 100000000000000 and self.characterEventFlags.goal1 == false then
+    if count >= 10 and self.characterEventFlags.goal1 == false then
         self.isInEvent = true
         self.cameraman.state = 3
         self.characterEventFlags.goal1 = true
         self.textbox:startTextBox(
             {
-                "Hello[fn:1] how are [fn:1]you [fn:1]doing?",
+                "Hello how are you doing?",
                 "I hope its a fine and lovely \nevening.",
-                "...We [fn:1]gotta keep growing the \ngarden.",
+                "...We gotta keep growing the \ngarden.",
                 "Make it big and strong before \nnightfall.",
                 "Why is that you ask?",
                 "Hehe Uh... Ill tell you later.",
                 "Just keep going for a while."
+            }
+        )
+    end
+
+    if count >= 20 and self.characterEventFlags.goal2 == false then
+        self.isInEvent = true
+        self.cameraman.state = 3
+        self.characterEventFlags.goal2 = true
+        self.textbox:startTextBox(
+            {
+                    "Hey you seem to be doing well",
+                    "Don't forget to click any worms\n you see",
+                    "You probably already knew that..."
+            }
+        )
+    end
+
+    if count >= 30 and self.characterEventFlags.goal3 == false then
+        self.isInEvent = true
+        self.cameraman.state = 3
+        self.characterEventFlags.goal3 = true
+        self.textbox:startTextBox(
+            {
+                "Hey...",
+                "It's going to come soon.",
+                "You know that right?",
+                "The 'thing' at night or...",
+                "The 'things' that come out at night.",
+                "Just be on the lookout ok?"
             }
         )
     end
@@ -1858,27 +1990,30 @@ local WeirdWorm = class({
 
 function WeirdWorm:new(x, y)
     self:super(x, y)
-    self.size.x = 64
-    self.size.y = 64
+    self.width = 64
+    self.height = 64
 
     self.bigflower = nil
-    self.sprite = Sprite(assets.images.weirdWorm)
+    self.sprite = Sprite(assets.images.weirdWorm, x, y)
+    addObject(self.sprite)
     self.countToGive = 0
 
     self.clickSound = SourcePlayer(assets.sounds.twinkle)
 end
 
 function WeirdWorm:destroy()
+    self.tableSlot.worm = nil
+
     self.sprite:queueDestroy()
     self.clickSound:queueDestroy()
 end
 
 function WeirdWorm:ready()
-    self.bigflower = getFirstObjectFromGroup("BigFlower")
+    self.bigflower = getFirstObjectFromGroup("bigflower")
 end
 
 function WeirdWorm:update(dt)
-    if PointAABB(worldMouseX, worldMouseY, self.position.x, self.position.y, self.scale.x, self.scale.y) then
+    if PointAABB(worldMouseX, worldMouseY, self.position.x, self.position.y, self.width, self.height) then
         if input:pressed("clickLeft") then
             self:queueDestroy()
             self.bigflower.count = self.bigflower.count + (self.bigflower.prevTempcps) * 60
@@ -1888,12 +2023,42 @@ function WeirdWorm:update(dt)
     end
 end
 
+local Scene = class({
+    name = "Scene",
+    extends = Object
+})
+
+function Scene:new()
+
+end
+
+function Scene:enter()
+
+end
+
+function Scene:update()
+
+end
+
+function Scene:leave()
+
+end
+
+function Scene:draw()
+
+end
 --------------------------------------------------------
 
 local Game = Object()
 Game.worms = {}
+Game.WeirdWorm = WeirdWorm
 Game.worms[1] = {x = 50, y = 200, worm = nil}
+Game.worms[2] = {x = 150, y = 240, worm = nil}
+Game.worms[3] = {x = 340, y = 210, worm = nil}
+Game.worms[4] = {x = 420, y = 260, worm = nil}
+Game.worms[5] = {x = 500, y = 200, worm = nil}
 Game:setScript(require 'scripts.game')
+
 table.insert(entities, Game)
 
 local gamebg = ColorShape(RectShape(6000, 6000), 0, 0, Color(0.2, 0.1, 0.8))

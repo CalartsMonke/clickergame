@@ -4,8 +4,8 @@ function script.update(self, dt)
 
     local pos = self.position
     if math.abs(pos.y - self.targetPositionY) <= 0.1 then
-        table.insert(self.lettersTable, self)
-        self.update = nil
+        --table.insert(self.lettersTable, self)
+        --self.update = nil
     end
 end
 
